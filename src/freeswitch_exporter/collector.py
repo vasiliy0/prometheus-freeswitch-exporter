@@ -15,6 +15,8 @@ from prometheus_client.core import GaugeMetricFamily
 
 from freeswitch_exporter.esl import ESL
 
+import xml.etree.ElementTree as ET
+
 
 class ESLProcessInfo():
     """
@@ -32,6 +34,11 @@ class ESLProcessInfo():
         (_, result) = await self._esl.send(
             'api json {"command" : "status", "data" : ""}')
         response = json.loads(result).get('response', {})
+
+        test_metric = GaugeMetricFamily(
+            'freeswitch_test',
+            'FreeSWITCH test metric')
+        test_metric.add_metric([], 12)
 
         process_info_metric = GaugeMetricFamily(
             'freeswitch_info',
@@ -74,6 +81,105 @@ class ESLProcessInfo():
             process_status_metric,
             process_memory_metric
         ], process_session_metrics)
+
+class ESLSofiaInfo():
+    """
+    Sofia info async collector
+    """
+
+    def __init__(self, esl: ESL):
+        self._esl = esl
+
+    async def collect(self):
+        """
+        Collects FreeSWITCH Sofia module metrics.
+        """
+
+        """
+        Profile metrics
+        """
+        (_, result) = await self._esl.send("api sofia xmlstatus")
+        tree = ET.fromstring(result)
+
+        profiles_state = {}
+        for profile in tree.iter("profile"):
+            profile_name = profile.find("name").text
+            profile_state = profile.find("state").text
+            if profile_name not in profiles_state:
+                profiles_state[profile_name] = 0
+
+            if 'RUNNING' in profile_state:
+                profiles_state[profile_name] += 1
+            else:
+                profiles_state[profile_name] -= 1
+
+        profile_metrics = {
+            'calls-in': GaugeMetricFamily(
+                'freeswitch_sofia_profile_calls_in',
+                'Total number of calls coming in via the profile',
+                labels=['name']),
+            'calls-out': GaugeMetricFamily(
+                'freeswitch_sofia_profile_calls_out',
+                'Total number of calls coming out via the profile',
+                labels=['name']),
+            'failed-calls-in': GaugeMetricFamily(
+                'freeswitch_sofia_profile_failed_calls_in',
+                'Total number of failed calls coming in via the profile',
+                labels=['name']),
+            'failed-calls-out': GaugeMetricFamily(
+                'freeswitch_sofia_profile_failed_calls_out',
+                'Total number of failed calls coming out via the profile',
+                labels=['name']),
+            'registrations': GaugeMetricFamily(
+                'freeswitch_sofia_profile_registrations',
+                'Total number of registrations on profile',
+                labels=['name']),
+        }
+
+        profile_up_metric = GaugeMetricFamily('freeswitch_sofia_profile_up', 'Shows, if gateway is up', labels=['name'])
+        for profile_name, state in profiles_state.items():
+            profile_up_metric.add_metric([profile_name], state)
+            (_, profile_result) = await self._esl.send(f'api sofia xmlstatus profile {profile_name}')
+            profile = ET.fromstring(profile_result).find('profile-info')
+            for key, profile_metric in profile_metrics.items():
+                value = int(profile.find(key).text)
+                profile_metric.add_metric([profile_name], value)
+
+        """
+        Gateway metrics
+        """
+        gateway_metrics = {
+            'calls-in': GaugeMetricFamily(
+                'freeswitch_sofia_gateway_calls_in',
+                'Total number of calls coming in via the gateway',
+                labels=['name']),
+            'calls-out': GaugeMetricFamily(
+                'freeswitch_sofia_gateway_calls_out',
+                'Total number of calls coming out via the gateway',
+                labels=['name']),
+            'failed-calls-in': GaugeMetricFamily(
+                'freeswitch_sofia_gateway_failed_calls_in',
+                'Total number of failed calls coming in via the gateway',
+                labels=['name']),
+            'failed-calls-out': GaugeMetricFamily(
+                'freeswitch_sofia_gateway_failed_calls_out',
+                'Total number of failed calls coming out via the gateway',
+                labels=['name'])
+        }
+
+        gateway_up_metric = GaugeMetricFamily('freeswitch_sofia_gateway_up', 'Shows, if gateway is up', labels=['name'])
+        for gateway in tree.iter("gateway"):
+            gateway_name = gateway.find("name").text
+            (_, gateway_result) = await self._esl.send(f'api sofia xmlstatus gateway {gateway_name}')
+            gateway_data = ET.fromstring(gateway_result)
+
+            gateway_up_metric.add_metric([gateway_name], int(gateway_data.find('status').text == "UP"))
+
+            for key, gateway_metric in gateway_metrics.items():
+                value = int(gateway_data.find(key).text)
+                gateway_metric.add_metric([gateway_name], value)
+
+        return itertools.chain([gateway_up_metric, profile_up_metric], gateway_metrics.values(), profile_metrics.values())
 
 
 class ESLChannelInfo():
@@ -268,7 +374,8 @@ class ChannelCollector():
         async with self._connect() as esl:
             return itertools.chain(
                 await ESLProcessInfo(esl).collect(),
-                await ESLChannelInfo(esl).collect())
+                await ESLChannelInfo(esl).collect(),
+                await ESLSofiaInfo(esl).collect())
 
 
 def collect_esl(config, host):
