@@ -7,7 +7,7 @@ import asyncio
 import itertools
 import json
 
-from contextlib import asynccontextmanager
+#from contextlib import asynccontextmanager
 
 from asgiref.sync import async_to_sync
 from prometheus_client import CollectorRegistry, generate_latest
@@ -357,26 +357,44 @@ class ChannelCollector():
         self._port = port
         self._password = password
 
-    @asynccontextmanager
-    async def _connect(self):
-        reader, writer = await asyncio.open_connection(self._host, self._port)
-        try:
-            esl = ESL(reader, writer)
-            await esl.initialize()
-            await esl.login(self._password)
-            yield esl
-        finally:
-            writer.close()
-            await writer.wait_closed()
+    # @asynccontextmanager
+    # async def _connect(self):
+    #     reader, writer = await asyncio.open_connection(self._host, self._port)
+    #     try:
+    #         esl = ESL(reader, writer)
+    #         await esl.initialize()
+    #         await esl.login(self._password)
+    #         yield esl
+    #     finally:
+    #         writer.close()
+    #         await writer.wait_closed()
 
     @async_to_sync
     async def collect(self):  # pylint: disable=missing-docstring
-        async with self._connect() as esl:
+        async with EslAsyncContextManager(self._host, self._port, self._password) as esl:
             return itertools.chain(
                 await ESLProcessInfo(esl).collect(),
                 await ESLChannelInfo(esl).collect(),
                 await ESLSofiaInfo(esl).collect())
 
+class EslAsyncContextManager(object):
+    def __init__(self, host, port, password):
+        self._host = host
+        self._port = port
+        self._password = password
+        self._reader = {}
+        self._writer = {}
+
+    async def __aenter__(self):
+        self._reader, self._writer = await asyncio.open_connection(self._host, self._port)
+        esl = ESL(self._reader, self._writer)
+        await esl.initialize()
+        await esl.login(self._password)
+        return esl
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        self._writer.close()
+        await self._writer.wait_closed()
 
 def collect_esl(config, host):
     """Scrape a host and return prometheus text format for it (asinc)"""
