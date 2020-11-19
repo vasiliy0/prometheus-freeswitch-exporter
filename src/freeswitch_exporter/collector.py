@@ -394,7 +394,7 @@ class EslAsyncContextManager(object):
 
     async def __aexit__(self, exc_type, exc_value, traceback):
         self._writer.close()
-        await self._writer.wait_closed()
+        #await self._writer.wait_closed()
 
 def collect_esl(config, host):
     """Scrape a host and return prometheus text format for it (asinc)"""
