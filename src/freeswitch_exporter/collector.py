@@ -311,6 +311,10 @@ class ESLChannelInfo():
             'FreeSWITCH RTP channel info',
             labels=['id', 'name', 'user_agent'])
 
+        active_calls_metric = GaugeMetricFamily(
+            'freeswitch_active_calls_count',
+            'FreeSWITCH total active calls count')
+
         millisecond_metrics = [
             'variable_rtp_audio_in_jitter_min_variance',
             'variable_rtp_audio_in_jitter_max_variance',
@@ -318,7 +322,9 @@ class ESLChannelInfo():
         ]
 
         (_, result) = await self._esl.send('api show calls as json')
-        for row in json.loads(result).get('rows', []):
+        calls = json.loads(result)
+        active_calls_metric.add_metric([], calls['row_count'])
+        for row in calls.get('rows', []):
             uuid = row['uuid']
 
             await self._esl.send(f'api uuid_set_media_stats {uuid}')
@@ -340,7 +346,7 @@ class ESLChannelInfo():
 
         return itertools.chain(
             channel_metrics.values(),
-            [channel_info_metric])
+            [channel_info_metric, active_calls_metric])
 
 
 class ChannelCollector():
